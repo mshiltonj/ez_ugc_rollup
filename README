@@ -1,0 +1,211 @@
+EzUgcRollup
+====================
+
+== NAME ==
+Easy User Generated Content Rollup Rails Plugin. 
+
+== DESCRIPTION ==
+
+Increases performance of a site that has ratings, comments, and votes.
+
+NOTE: THIS PLUGIN IS STILL IN BEING ACTIVELY DEVELOPED. THERE MAY BE INCOMPATIBLE API CHANGES MADE
+
+Works in Rails 2.1.0+. Untested in earlier versions. 
+
+== INTRODUCTION ==
+
+The EzUgcRollup plugin is meant to be used on top of one or more of the following existing rails plugins:
+
+* acts_as_rateable
+** http://www.juixe.com/techknow/index.php/2006/07/05/acts-as-rateable-plugin/
+
+* acts_as_commentable
+** http://www.juixe.com/techknow/index.php/2006/06/18/acts-as-commentable-plugin/
+
+* acts_as_voteable
+** http://www.juixe.com/techknow/index.php/2006/06/24/acts-as-voteable-rails-plugin/
+
+All three of these plugin are by Cosmin Radoi. I am not Cosmin Radoi.
+
+EzUgcRollup doesn't replace these plugins, but adds to them in an aggregated way. To use EzUgcRollup,
+you still need to intall the underlying plugin(s) you are interested in using. And you need to be familiar with
+using to plugins directly. Go ahead and read the info at the above links. I'll wait.
+
+[...]
+
+
+THE PROBLEM
+As cool and useful as these plugins are, they still require instantiating a potentially large 
+number of objects in a request just to get some summary information. 
+
+For example, If you have a Story model that is rateable and commentable, and you want 
+display a list of story headlines along with the number of comments, the number of ratings, 
+and the average rating, you would do something like this:
+
+  BEFORE:
+  <% @stories.each do |s| %>
+    <div>
+      <%= s.headline %>
+      Rated: <%= s.rating  %>/10 - (<%= s.ratings.size %> ratings)
+      Comments: <%= s.comments.size %> comments
+    </div>
+  <% end %>
+
+The way these plugins are implemented now, if stories have an average of 25 comments and 100 ratings, then a 
+list of 10 stories rendered as above would require instantiating 10 + (10 * 25) + (10 * 100) = 1260 objects. 
+This is without actually _displaying_ any comments or actual ratings.
+
+That's a lot of objects. For a busy site, it will eat up memory and slow things down.
+
+This plugin aims to rollup that summary information into a separate table and model, which is
+updated whenever comment is added, a rating is made, etc. Then, to display the story list as above,
+you just reference the rollup information instead of accessing the rating (or comment or vote)
+data directly, reducing the overhead significantly with little change to your rails app.
+
+  AFTER:
+  <% @stories.each do |s| %>
+    <div>
+      <%= s.headline %>
+      Rated: <%= s.rollup.rating_average %>/10 - (<%= s.rollup.rating_count %> ratings)
+      Comments: <%= s.rollup.comment_count %> comments
+    </div>
+  <% end %>
+
+== INSTALLATION ==
+
+== Install prerequsites ==
+Install the acts_as_rateable and/or acts_as_commentable and/or the acts_act_voteable plugins
+(See docs for those plugins)
+
+== Install the EzUgcRollup ==
+For now:
+
+  ./script/plugin install git://github.com/mshiltonj/ez_ugc_rollup.git
+
+
+=== Migration/Table ==
+You'll need to add a 'ugc_rollups' table to your schema. Here's the migration:
+
+  class CreateUgcRollups < ActiveRecord::Migration
+    def self.up
+      create_table :ugc_rollups do |t|
+        t.integer :ugc_rollupable_id
+        t.string :ugc_rollupable_type
+
+        # for acts_as_rateable
+        t.integer :rating_total
+        t.integer :rating_count
+        t.float :rating_average
+
+        # for acts_as_commentable
+        t.integer :comment_count
+
+        # for acts_as_voteable
+        t.integer :vote_count
+        t.integer :vote_up_count
+        t.integer :vote_down_count
+        t.integer :vote_total
+
+        t.timestamps
+      end
+    end
+
+    def self.down
+      drop_table :ugc_rollups
+    end
+  end
+
+The ez_ugc_rollup plugin adds class methods to ActiveRecord::Base
+
+* acts_as_rateable_rollup
+* acts_as_commentable_rollup
+* acts_as_rateable_rollup             # NOT YET IMPLEMENTED
+
+These methods are meant to be used a drop in _replacements_ of the non-rollup method call of the 
+main plugins.
+
+  class Story < ActiveRecord::Base
+    acts_as_rateable_rollup
+    acts_as_commentable_rollup
+    [...]
+  end
+
+And that's pretty much it to enable the additional functionality. 
+
+== Populating the Rollup Data ==
+
+You should build the rollup data before using,
+like so.
+
+  Story.rebuild_rateable_rollups
+
+Or
+
+  Story.rebuild_commentable_rollups
+
+Or
+
+  Story.rebuild_voteable_rollups
+
+Those are the three class methods this plugin could export. There's one for each acts_as_* call.
+These operations are slow and should be used during a maintenance mode. These operations go through
+all the *able data for each record in the class and inserts the the rollup summaries in the 
+ugc_rollups table. 
+
+Now the rollups are built and when your users make comments, vote, or rate, the rollup data is 
+updated automatically, just by following the docs in the underlying plugins. To access the 
+rollup data, you call _different_ methods, and generally only during rendering or display.
+
+If something ever goes wrong and the data is corrupted, you can run these methods again to re-sync the
+rollup data.
+
+== What rollup data is there? ==
+
+When you include ez_ugc_rollup functionality in your model (by calling an acts_as_(rateable|commentable|voteable)_rollup 
+as described above) the model also gets a rollup() instance method. This holds a UgcRollup object. This object has 
+a number of fields:
+
+  rollup.rating_total   # => integer, sum total of all ratings
+  rollup.rating_count   # => integer, number of ratings made
+  rollup.rating_average # => float, average rating (you'll prolly want to format w/ %02d or similar
+
+  rollup.comment_count  # => integer, number of comment made
+ 
+  # VOTE-RELATED METHODS NOT YET IMPLEMENTNED
+  rollup.vote_total       # => integer, sum total of all votes, both up and down
+  rollup.vote_count       # => integer, number of votes cast
+  rollup.vote_up_count    # => integer, number of up votes cast
+  rollup.vote_down_count  # => integer, number of down votes cast
+
+The difference between vote_total and vote_count is like so:
+
+  15 up votes
+   7 down votes
+
+  Vote total: 8  (15 up - 7 down, like a "score")
+  Vote count: 22 (15 up + 8 down)
+
+(There's also the ugc_rollup() method that rails adds automatically, but don't call that one. ugc_rollup() may return nil if there's no ugc_rollup() 
+data for that record, but rollup() will make sure you have you an object initialized if you call it. 
+
+== Update Templates ==
+To use these rollup values in your templates, just change the method calls you were using.
+
+  <% @stories.each do |s| %>
+    <div>
+      <%= s.headline %>
+      Rated: <%= s.rollup.rating_average  %>/10 - (<%= s.rollup.rating_total %> ratings)
+      Comments: <%= s.rollup.comment_count %> comments
+    </div>
+  <% end %>
+
+That's it. Now you get the stored rollup data instead of calculating it on every request.
+
+== To sum up ==
+* install acts_as_(rateable|commentable|voteable) plugin(s), per their docs
+* install the ez_ugc_rollup plugin 
+* add the migration 
+* rebuild the rollups
+* change templates to access the rollup data.
+
+Copyright (c) 2008 Steven Hilton <mshiltonj@gmail.com>, released under the MIT license
